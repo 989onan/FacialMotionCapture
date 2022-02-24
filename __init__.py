@@ -10,6 +10,8 @@ import numpy
 from bpy.props import EnumProperty
 import webbrowser
 from bpy_extras.io_utils import ImportHelper
+import struct
+import math
 
 spam_loadertwo = importlib.util.find_spec('pyaudio')
 foundaudio = spam_loadertwo is not None
@@ -41,26 +43,38 @@ class VIEW3D_PT_TemplatePanel(bpy.types.Panel):
             #    context.scene.cv_target == ""
             #if not context.scene.get(context.scene.cv_target, None).type != "ARMATURE":
             #    context.scene.cv_target == ""
-            object = row.prop_search(context.scene, 'cv_target', bpy.data, 'armatures', icon='OBJECT_DATA', text='')
-            
+            row = layout.row()
+            row.label(text="Armature Target")
+            object = row.prop_search(context.scene, 'cv_target', bpy.data, 'objects', icon='OBJECT_DATA', text='')
+            try:
+                bpy.data.objects[context.scene.cv_target].data.bones
+            except Exception as e:
+                row = layout.row()
+                row.label(text="Need to select an object that is an Armature!")
+                return
+            pose_bone = bpy.data.objects[context.scene.cv_target].cvbonedata
             
             row = self.layout.row()
             if context.scene.cv_target == "":
                 row.enabled = False
-            op = row.operator("wm.opencv_operator", text="Start Tracking", icon="OUTLINER_OB_CAMERA")
+            operator_text = ""
+            if bpy.context.scene.cvtwo.modalrunning == False:
+                operator_text = "Start Tracking"
+            else:
+                operator_text = "Stop Tracking"
+            op = row.operator("wm.opencv_operator", text=operator_text, icon="OUTLINER_OB_CAMERA")
             
             row = layout.row()
             row.prop(bpy.context.scene.cvtwo, "landmark_model_path")
             
-            try:
-                bpy.data.armatures[context.scene.cv_target].id_data.bones
-            except:
-                return
-            pose_bone = context.scene.objects[context.scene.cv_target].cvbonedata
+            
             
             if foundaudio:
                 row = self.layout.row()
                 head_fk = row.prop(pose_bone, 'use_audio', text='Use audio for mouth movement')
+                if pose_bone.use_audio == True:
+                    row = self.layout.row()
+                    row.prop(pose_bone, 'audio_channel')
             else:
                 row = self.layout.row()
                 row.label(text="Module pyaudio not installed. Can't use audio for mouth.")
@@ -68,19 +82,19 @@ class VIEW3D_PT_TemplatePanel(bpy.types.Panel):
                 head_fk = row.prop(pose_bone, 'use_audio', text='Use audio for mouth movement')
             row = self.layout.row()
             row.label(text="Head Bone")
-            head_fk = row.prop_search(pose_bone, 'head_fk', bpy.data.armatures[context.scene.cv_target].id_data, 'bones', icon='BONE_DATA', text='')
+            head_fk = row.prop_search(pose_bone, 'head_fk', bpy.data.objects[context.scene.cv_target].data, 'bones', icon='BONE_DATA', text='')
             
             row = self.layout.row()
             row.label(text="Mouth Control (x movement=width , y movement = height)")
-            mouth_ctrl = row.prop_search(pose_bone, 'mouth_ctrl', bpy.data.armatures[context.scene.cv_target].id_data, 'bones', icon='BONE_DATA', text='')
+            mouth_ctrl = row.prop_search(pose_bone, 'mouth_ctrl', bpy.data.objects[context.scene.cv_target].data, 'bones', icon='BONE_DATA', text='')
             
             row = self.layout.row()
             row.label(text="Eyebrow L")
-            brow_ctrl_L = row.prop_search(pose_bone, 'brow_ctrl_L', bpy.data.armatures[context.scene.cv_target].id_data, 'bones', icon='BONE_DATA', text='')
+            brow_ctrl_L = row.prop_search(pose_bone, 'brow_ctrl_L', bpy.data.objects[context.scene.cv_target].data, 'bones', icon='BONE_DATA', text='')
             
             row = self.layout.row()
             row.label(text="Eyebrow R")
-            brow_ctrl_R = row.prop_search(pose_bone, 'brow_ctrl_R', bpy.data.armatures[context.scene.cv_target].id_data, 'bones', icon='BONE_DATA', text='')
+            brow_ctrl_R = row.prop_search(pose_bone, 'brow_ctrl_R', bpy.data.objects[context.scene.cv_target].data, 'bones', icon='BONE_DATA', text='')
             
         else:
             row = layout.row()
@@ -105,6 +119,7 @@ class ArmatureData(bpy.types.PropertyGroup):
     brow_ctrl_L : bpy.props.StringProperty()
     brow_ctrl_R : bpy.props.StringProperty()
     use_audio : bpy.props.BoolProperty()
+    audio_channel : bpy.props.IntProperty(default=0,description="Audio Channel For Microphone")
         
             
 class CV2ModelLink(bpy.types.Operator):
@@ -186,7 +201,6 @@ class OpenCVAnimOperator(bpy.types.Operator):
         
     _timer = None
     _cap  = None
-    stop = False
     
     
     p = None
@@ -255,7 +269,8 @@ class OpenCVAnimOperator(bpy.types.Operator):
     # The main "loop"
     def modal(self, context, event):
         
-        if (event.type in {'RIGHTMOUSE', 'ESC'}) or self.stop == True:
+        if (event.type in {'RIGHTMOUSE', 'ESC'}) or bpy.context.scene.cvtwo.modalrunning == False:
+            bpy.context.scene.cvtwo.modalrunning = False
             self.cancel(context)
             return {'CANCELLED'}
 
@@ -354,9 +369,9 @@ class OpenCVAnimOperator(bpy.types.Operator):
                     if self.Mouth != None:
                         if self.Audio and foundaudio:
                             data = self.audio_anaylisis()
-                            self.Mouth.location[2] = self.smooth_value("m_h", 2, -self.get_rms(data))
+                            self.Mouth.location[1] = self.smooth_value("m_h", 2, self.get_rms(data))
                         else:
-                            self.Mouth.location[2] = self.smooth_value("m_h", 2, -self.get_range("mouth_height", numpy.linalg.norm(shape[62] - shape[66])) * 0.06 )
+                            self.Mouth.location[1] = self.smooth_value("m_h", 2, -self.get_range("mouth_height", numpy.linalg.norm(shape[62] - shape[66])) * 0.06 )
                             self.Mouth.location[0] = self.smooth_value("m_w", 2, (self.get_range("mouth_width", numpy.linalg.norm(shape[54] - shape[48])) - 0.5) * -0.04)
                         
                         #Set keyframe so blender updates and shows position
@@ -413,7 +428,8 @@ class OpenCVAnimOperator(bpy.types.Operator):
                                     channels = self.CHANNELS,
                                     rate = self.RATE,
                                     input = True,
-                                    frames_per_buffer = self.chunk)
+                                    frames_per_buffer = self.chunk,
+                                    input_device_index = context.scene.objects[context.scene.cv_target].cvbonedata.audio_channel)
 
                     self.all = []
                     self.aux = []
@@ -428,18 +444,23 @@ class OpenCVAnimOperator(bpy.types.Operator):
             bpy.ops.screen.animation_cancel(restore_frame=False)
         
     def execute(self, context):
-        bpy.app.handlers.frame_change_pre.append(self.stop_playback)
+        if bpy.context.scene.cvtwo.modalrunning == True:
+            bpy.context.scene.cvtwo.modalrunning = False
+            return {'FINISHED'}
+        else:
+            bpy.app.handlers.frame_change_pre.append(self.stop_playback)
 
-        
-        
             
-        self.fm = cv2.face.createFacemarkLBF()
-        self.fm.loadModel(context.scene.cvtwo.landmark_model_path)
-        
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.01, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
+            
+                
+            self.fm = cv2.face.createFacemarkLBF()
+            self.fm.loadModel(context.scene.cvtwo.landmark_model_path)
+            
+            wm = context.window_manager
+            self._timer = wm.event_timer_add(0.01, window=context.window)
+            wm.modal_handler_add(self)
+            bpy.context.scene.cvtwo.modalrunning = True
+            return {'RUNNING_MODAL'}
     
     
     if foundaudio:
@@ -502,6 +523,9 @@ class CVTWOSettings(bpy.types.PropertyGroup):
         default="NO PATH SPECIFIED",
         subtype='FILE_PATH'
         )
+    modalrunning : bpy.props.BoolProperty(
+        name="MODAL RUNNING INTERNAL DO NOT USE",
+        default = False)
 
 
 def register():
